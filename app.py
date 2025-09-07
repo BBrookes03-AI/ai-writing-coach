@@ -2,8 +2,7 @@ import streamlit as st
 import openai
 import os
 import re
-from typing import List, Dict
-import json
+from typing import Dict
 
 # Configure OpenAI
 openai.api_key = os.environ.get("OPENAI_API_KEY")
@@ -29,7 +28,7 @@ st.markdown("""
     }
     .feedback-section {
         background: #f8f9fa;
-        padding: 1rem;
+        padding: 1.5rem;
         border-radius: 8px;
         margin: 1rem 0;
         border-left: 4px solid #007bff;
@@ -55,29 +54,72 @@ st.markdown("""
         margin: 0.5rem 0;
         border-left: 4px solid #28a745;
     }
-    /* Accessibility improvements */
     .stButton > button {
         background-color: #007bff;
         color: white;
         border: none;
-        padding: 0.5rem 1rem;
-        border-radius: 4px;
-        font-weight: 500;
+        padding: 0.75rem 1.5rem;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 1rem;
+        width: 100%;
     }
     .stButton > button:hover {
         background-color: #0056b3;
     }
-    /* Ensure good contrast for screen readers */
-    .stSelectbox label, .stTextArea label {
-        font-weight: 600;
-        color: #333;
-    }
 </style>
 """, unsafe_allow_html=True)
 
+def get_writing_prompts():
+    """Define prompts and personas for different writing types"""
+    return {
+        "Discussion Post": {
+            "persona": "You are Nova, an AI writing coach specializing in online discussion facilitation. You help students create engaging, thoughtful discussion posts that demonstrate critical thinking and encourage peer dialogue.",
+            "prompt_template": """Analyze this discussion post focusing on:
+1. **Engagement**: Does it invite response and build on the prompt?
+2. **Critical Thinking**: Are claims supported with reasoning or evidence?
+3. **Peer Connection**: Does it reference course materials or invite dialogue?
+4. **Clarity**: Is the main point clear and well-organized?
+
+Provide 2-3 specific, actionable suggestions and ask 1-2 Socratic questions that help the student deepen their analysis."""
+        },
+        
+        "Learning Journal": {
+            "persona": "You are Nova, an AI writing coach who specializes in reflective writing. You help students develop metacognitive awareness and connect personal experiences to academic learning.",
+            "prompt_template": """Analyze this learning journal entry focusing on:
+1. **Reflection Depth**: Does it go beyond summary to analyze learning?
+2. **Personal Connection**: How well does it connect experience to concepts?
+3. **Metacognition**: Does it show awareness of the learning process?
+4. **Growth Mindset**: Does it identify specific areas for development?
+
+Provide encouraging feedback with 2-3 suggestions for deepening reflection, and ask 1-2 questions that help them explore their learning further."""
+        },
+        
+        "Academic Paper": {
+            "persona": "You are Nova, an AI writing coach specializing in academic writing. You help students develop clear arguments, integrate sources effectively, and write with scholarly precision.",
+            "prompt_template": """Analyze this academic writing focusing on:
+1. **Argument Structure**: Is there a clear thesis with logical support?
+2. **Evidence Integration**: Are sources used effectively to support claims?
+3. **Academic Voice**: Is the tone appropriate for scholarly writing?
+4. **Organization**: Do ideas flow logically with clear transitions?
+
+Provide specific feedback on strengthening the argument and ask 1-2 questions that help the student think critically about their evidence and reasoning."""
+        },
+        
+        "Thesis Statement": {
+            "persona": "You are Nova, an AI writing coach who specializes in helping students craft strong thesis statements. You focus on arguability, specificity, and clarity.",
+            "prompt_template": """Analyze this thesis statement focusing on:
+1. **Arguability**: Does it present a debatable claim rather than fact?
+2. **Specificity**: Is it focused enough to be supported in the paper?
+3. **Clarity**: Is the main argument immediately clear to readers?
+4. **Scope**: Is it appropriately sized for the assignment?
+
+Provide specific suggestions for strengthening the thesis and ask 1-2 questions that help the student refine their central argument."""
+        }
+    }
+
 def detect_citations(text: str) -> Dict:
     """Basic citation detection and analysis"""
-    # Look for common citation patterns
     apa_pattern = r'\([A-Za-z]+(?:,\s*[A-Za-z]+)*,\s*\d{4}\)'
     mla_pattern = r'\([A-Za-z]+\s+\d+\)'
     url_pattern = r'https?://[^\s]+'
@@ -86,258 +128,162 @@ def detect_citations(text: str) -> Dict:
     mla_citations = re.findall(mla_pattern, text)
     urls = re.findall(url_pattern, text)
     
-    # Simple heuristics for citation quality
     has_recent_sources = any('202' in citation for citation in apa_citations)
-    citation_density = (len(apa_citations) + len(mla_citations)) / max(len(text.split()), 1) * 1000
     
     return {
         "apa_count": len(apa_citations),
         "mla_count": len(mla_citations),
         "url_count": len(urls),
         "has_recent_sources": has_recent_sources,
-        "citation_density": citation_density,
         "total_citations": len(apa_citations) + len(mla_citations)
     }
 
-def generate_socratic_questions(text: str, focus_area: str) -> str:
-    """Generate Socratic questions based on the text and focus area"""
+def get_ai_feedback(text: str, writing_type: str) -> str:
+    """Get tailored feedback based on writing type"""
+    prompts = get_writing_prompts()
     
-    system_prompt = f"""You are Nova, an AI writing coach that uses Socratic questioning to guide students to insights about their own writing. 
-
-Your role is to ask 3-4 thoughtful questions that help the student discover areas for improvement in their writing, specifically focusing on {focus_area}.
-
-Guidelines:
-- Ask questions that lead students to self-discovery rather than giving direct answers
-- Use "What if..." "How might..." "Why do you think..." question starters
-- Make questions specific to their actual text
-- Focus on helping them think critically about their choices
-- Keep questions accessible but intellectually engaging
-- End with one question that pushes them to consider their audience/purpose
-
-Return your response as a JSON object with this structure:
-{{
-    "questions": [
-        {{"question": "Your question here", "purpose": "Brief explanation of what this question helps them discover"}},
-        // 2-3 more questions
-    ],
-    "reflection_prompt": "A final broader question about their writing goals"
-}}
-"""
-
+    if writing_type not in prompts:
+        writing_type = "Academic Paper"  # Default fallback
+    
+    persona = prompts[writing_type]["persona"]
+    prompt_template = prompts[writing_type]["prompt_template"]
+    
+    # Add citation context if citations are detected
+    citation_data = detect_citations(text)
+    citation_context = ""
+    if citation_data["total_citations"] > 0:
+        citation_context = f"\n\nNote: I detected {citation_data['total_citations']} citations in this text. Consider how well these sources are integrated into the argument."
+    
+    full_prompt = f"{prompt_template}{citation_context}\n\nKeep your response under 300 words, be encouraging but specific, and focus on the most important improvements."
+    
     try:
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Here is the student's writing:\n\n{text}"}
+                {"role": "system", "content": persona},
+                {"role": "user", "content": f"Here is the student's {writing_type.lower()}:\n\n{text}\n\n{full_prompt}"}
             ],
             temperature=0.7,
-            max_tokens=600
+            max_tokens=400
         )
         
         return response["choices"][0]["message"]["content"]
-    except Exception as e:
-        return json.dumps({
-            "questions": [
-                {"question": "What is the main argument you're trying to make in this piece?", "purpose": "Helps identify thesis clarity"},
-                {"question": "Who is your intended audience and how does that shape your word choices?", "purpose": "Develops audience awareness"},
-                {"question": "What evidence best supports your strongest point?", "purpose": "Encourages critical evaluation of support"}
-            ],
-            "reflection_prompt": "How well does this piece achieve what you set out to accomplish?"
-        })
-
-def analyze_citations_with_ai(text: str, citation_data: Dict) -> str:
-    """AI analysis of citation quality and integration"""
-    
-    system_prompt = """You are Nova, an AI writing coach specializing in research and citation analysis. Analyze the student's use of sources and citations.
-
-Focus on:
-- Integration of sources into arguments (not just citation format)
-- Variety and credibility of sources
-- How well sources support the argument
-- Opportunities for stronger evidence
-
-Provide specific, actionable feedback in a supportive tone. If you see citation attempts, acknowledge the effort while suggesting improvements.
-
-Keep response under 200 words and be encouraging but honest."""
-
-    citation_context = f"""
-    Citation Analysis:
-    - Total citations found: {citation_data['total_citations']}
-    - APA style citations: {citation_data['apa_count']}
-    - MLA style citations: {citation_data['mla_count']}
-    - URLs found: {citation_data['url_count']}
-    - Recent sources detected: {citation_data['has_recent_sources']}
-    """
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"{citation_context}\n\nStudent's text:\n{text}"}
-            ],
-            temperature=0.6,
-            max_tokens=300
-        )
         
-        return response["choices"][0]["message"]["content"]
     except Exception as e:
-        return "I notice you're working on incorporating sources into your writing. Consider how each source specifically supports your main argument and whether you're explaining the connection clearly for your readers."
+        st.error(f"API Error: {str(e)}")
+        return f"I'm having trouble connecting to provide feedback right now. Please check your API key and try again."
 
 # Main App Interface
-st.markdown('<div class="main-header"><h1>✍️ Nova: AI Writing Coach</h1><p>Discover insights about your writing through guided reflection</p></div>', unsafe_allow_html=True)
-
-# Initialize session state
-if 'analysis_complete' not in st.session_state:
-    st.session_state.analysis_complete = False
+st.markdown('<div class="main-header"><h1>✍️ Nova: AI Writing Coach</h1><p>Get personalized feedback for your academic writing</p></div>', unsafe_allow_html=True)
 
 # Input Section
-col1, col2 = st.columns([3, 1])
+st.markdown("### 📝 Your Writing")
+user_input = st.text_area(
+    "Paste your text below:",
+    height=250,
+    help="Paste your discussion post, journal entry, paper draft, or thesis statement",
+    placeholder="Enter your writing here..."
+)
+
+# Writing Type Selection
+st.markdown("### 🎯 Type of Writing")
+col1, col2 = st.columns(2)
 
 with col1:
-    user_input = st.text_area(
-        "📝 Paste your draft below:",
-        height=200,
-        help="Paste your thesis, paragraph, or essay draft for analysis",
-        placeholder="Enter your writing here..."
+    writing_type = st.selectbox(
+        "What type of writing is this?",
+        [
+            "Discussion Post",
+            "Learning Journal", 
+            "Academic Paper",
+            "Thesis Statement"
+        ],
+        help="Choose the type that best matches your assignment"
     )
 
 with col2:
-    st.markdown("### 🎯 Focus Area")
-    focus = st.selectbox(
-        "What aspect would you like to explore?",
-        [
-            "Argument Development",
-            "Evidence & Citations", 
-            "Clarity & Organization",
-            "Audience Awareness",
-            "Critical Thinking"
-        ],
-        help="Choose the area you'd like to focus on for guided questions"
-    )
-    
-    writing_type = st.selectbox(
-        "Type of writing:",
-        [
-            "Academic Essay",
-            "Research Paper", 
-            "Thesis/Dissertation",
-            "Lab Report",
-            "Reflection Paper"
-        ]
+    # Optional context
+    additional_context = st.text_input(
+        "Assignment context (optional):",
+        placeholder="e.g., 'for Psychology 101' or 'arguing about climate policy'",
+        help="Any additional context about your assignment"
     )
 
-# Analysis Button
-if st.button("🔍 Start Guided Analysis", type="primary"):
-    if user_input.strip() == "":
+# Get Feedback Button
+st.markdown("### 🔍 Analysis")
+if st.button("Get Nova's Feedback", type="primary"):
+    if not user_input.strip():
         st.warning("⚠️ Please enter some text to analyze.")
+    elif not os.environ.get("OPENAI_API_KEY"):
+        st.error("❌ OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
     else:
-        with st.spinner("🤔 Nova is preparing thoughtful questions about your writing..."):
+        with st.spinner(f"🤔 Nova is analyzing your {writing_type.lower()}..."):
             
-            # Analyze citations
+            # Get AI feedback
+            feedback = get_ai_feedback(user_input, writing_type)
+            
+            # Display results
+            st.markdown("---")
+            
+            # Main feedback section
+            st.markdown('<div class="feedback-section">', unsafe_allow_html=True)
+            st.markdown(f"## 💡 Feedback for your {writing_type}")
+            
+            # Add context if provided
+            if additional_context:
+                st.markdown(f"*Context: {additional_context}*")
+            
+            st.markdown(feedback)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Citation analysis if applicable
             citation_data = detect_citations(user_input)
+            if writing_type in ["Academic Paper", "Thesis Statement"] and citation_data["total_citations"] > 0:
+                st.markdown('<div class="citation-alert">', unsafe_allow_html=True)
+                st.markdown("### 📚 Citation Summary")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Citations Found", citation_data['total_citations'])
+                with col2:
+                    st.metric("URLs", citation_data['url_count'])
+                with col3:
+                    recent_text = "✓" if citation_data['has_recent_sources'] else "Check dates"
+                    st.metric("Recent Sources", recent_text)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            # Generate Socratic questions
-            questions_response = generate_socratic_questions(user_input, focus)
+            # Next steps
+            st.markdown('<div class="strength-highlight">', unsafe_allow_html=True)
+            st.markdown("### 🚀 Next Steps")
             
-            # Analyze citations with AI
-            citation_feedback = analyze_citations_with_ai(user_input, citation_data)
+            if writing_type == "Discussion Post":
+                st.markdown("- **Post and engage**: Share your post and respond thoughtfully to peers\n- **Return later**: Bring back revised drafts for additional feedback")
+            elif writing_type == "Learning Journal":
+                st.markdown("- **Reflect deeper**: Consider the questions Nova asked\n- **Connect more**: Link to additional course concepts or experiences")
+            elif writing_type == "Academic Paper":
+                st.markdown("- **Revise**: Address the feedback points Nova identified\n- **Peer review**: Share with classmates or visit the writing center")
+            else:  # Thesis Statement
+                st.markdown("- **Refine**: Revise your thesis based on Nova's suggestions\n- **Expand**: Use your improved thesis to guide your full paper")
             
-            st.session_state.analysis_complete = True
-            st.session_state.questions_data = questions_response
-            st.session_state.citation_feedback = citation_feedback
-            st.session_state.citation_data = citation_data
+            st.markdown('</div>', unsafe_allow_html=True)
 
-# Display Results
-if st.session_state.analysis_complete:
-    
-    # Parse questions data
-    try:
-        questions_json = json.loads(st.session_state.questions_data)
-        questions = questions_json.get("questions", [])
-        reflection_prompt = questions_json.get("reflection_prompt", "")
-    except:
-        # Fallback if JSON parsing fails
-        questions = [
-            {"question": "What is the strongest part of your argument and why?", "purpose": "Identifies areas of strength"},
-            {"question": "Where might readers need more explanation or evidence?", "purpose": "Highlights gaps in support"},
-            {"question": "How does this piece serve your reader's needs?", "purpose": "Develops audience awareness"}
-        ]
-        reflection_prompt = "What would you change if you were writing this for a different audience?"
-    
-    st.markdown("---")
-    
-    # Socratic Questions Section
-    st.markdown('<div class="feedback-section">', unsafe_allow_html=True)
-    st.markdown("## 🤔 Questions to Guide Your Thinking")
-    st.markdown("*Take a moment to consider each question. There are no 'wrong' answers—these are meant to help you discover insights about your own writing.*")
-    
-    for i, q in enumerate(questions, 1):
-        st.markdown(f'<div class="question-box">', unsafe_allow_html=True)
-        st.markdown(f"**Question {i}:** {q['question']}")
-        st.markdown(f"*This question helps you: {q['purpose']}*")
-        
-        # Student response area
-        response_key = f"response_{i}"
-        st.text_area(
-            f"Your thoughts on Question {i}:",
-            key=response_key,
-            height=80,
-            placeholder="Reflect on this question... there's no right or wrong answer."
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Reflection prompt
-    if reflection_prompt:
-        st.markdown(f'<div class="question-box">', unsafe_allow_html=True)
-        st.markdown(f"**Final Reflection:** {reflection_prompt}")
-        st.text_area(
-            "Your reflection:",
-            key="final_reflection",
-            height=100,
-            placeholder="Consider your overall goals and audience..."
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Citation Analysis Section
-    st.markdown('<div class="citation-alert">', unsafe_allow_html=True)
-    st.markdown("## 📚 Research & Citation Insights")
-    
-    # Citation statistics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Citations Found", st.session_state.citation_data['total_citations'])
-    with col2:
-        st.metric("URLs Detected", st.session_state.citation_data['url_count'])
-    with col3:
-        recent_text = "Yes" if st.session_state.citation_data['has_recent_sources'] else "Check dates"
-        st.metric("Recent Sources", recent_text)
-    
-    # AI citation feedback
-    st.markdown("### 💡 Research Integration Feedback")
-    st.markdown(st.session_state.citation_feedback)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Next Steps
-    st.markdown('<div class="strength-highlight">', unsafe_allow_html=True)
-    st.markdown("## 🚀 Next Steps")
+# Help section
+with st.expander("❓ How to use Nova effectively"):
     st.markdown("""
-    **After reflecting on these questions:**
-    1. **Revise** based on your insights from the questions above
-    2. **Strengthen** your research integration using the citation feedback
-    3. **Share** your draft with a peer or instructor for additional perspective
-    4. **Return** to Nova with your revised draft for another round of guided analysis
-    """)
-    st.markdown('</div>', unsafe_allow_html=True)
+    **For best results:**
+    - **Be specific** about your assignment context
+    - **Include complete thoughts** rather than fragments
+    - **Try multiple drafts** - Nova can help you improve iteratively
+    - **Focus on one piece** at a time for clearer feedback
     
-    # Reset button
-    if st.button("📝 Analyze New Text"):
-        st.session_state.analysis_complete = False
-        st.rerun()
+    **Writing type guide:**
+    - **Discussion Post**: Forum responses, online discussions
+    - **Learning Journal**: Reflection essays, process writing  
+    - **Academic Paper**: Research papers, essays, reports
+    - **Thesis Statement**: Just your main argument/claim
+    """)
 
-# Footer for iframe context
+# Footer
 st.markdown("---")
-st.markdown("*Nova AI Writing Coach - Designed for academic writing development*")
+st.markdown("*Nova AI Writing Coach - Supporting academic writing development*")
